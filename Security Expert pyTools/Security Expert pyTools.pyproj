@@ -22,6 +22,21 @@
     <EnableUnmanagedDebugging>false</EnableUnmanagedDebugging>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="modules\Alarms.py" />
+    <Compile Include="modules\Areas.py" />
+    <Compile Include="modules\Cameras.py" />
+    <Compile Include="modules\Controllers.py" />
+    <Compile Include="modules\Doors.py" />
+    <Compile Include="modules\EventFilters.py" />
+    <Compile Include="modules\FloorPlans.py" />
+    <Compile Include="modules\FloorPlanSymbols.py" />
+    <Compile Include="modules\Intercoms.py" />
+    <Compile Include="modules\LineData.py" />
+    <Compile Include="modules\LinePointsData.py" />
+    <Compile Include="modules\PGMs.py" />
+    <Compile Include="modules\Sites.py" />
+    <Compile Include="modules\TroubleZones.py" />
+    <Compile Include="modules\__init__.py" />
     <Compile Include="Security_Expert_pyTools.py" />
   </ItemGroup>
   <ItemGroup>
@@ -37,6 +52,9 @@
       <PathEnvironmentVariable>PYTHONPATH</PathEnvironmentVariable>
       <Architecture>X64</Architecture>
     </Interpreter>
+  </ItemGroup>
+  <ItemGroup>
+    <Folder Include="modules\" />
   </ItemGroup>
   <Import Project="$(MSBuildExtensionsPath32)\Microsoft\VisualStudio\v$(VisualStudioVersion)\Python Tools\Microsoft.PythonTools.targets" />
   <!-- Uncomment the CoreCompile target to enable the Build command in
