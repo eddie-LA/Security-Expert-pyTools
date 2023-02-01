@@ -1,5 +1,7 @@
 import os
 import fnmatch
+import shutil
+from sqlite3 import connect
 import pyodbc
 import numpy as np
 import pandas as pd
@@ -8,6 +10,7 @@ import logging
 from pathlib import Path
 from consolemenu import *
 from consolemenu.items  import *
+from sqlalchemy.engine import URL, create_engine
 from modules import Alarms, Areas, Cameras, Controllers, Doors, EventFilters,FloorPlans, FloorPlanSymbols, Intercoms, LineData, LinePointsData, PGMs, Sites, TroubleZones
 
 # Connection information:
@@ -34,12 +37,21 @@ tables = ['Alarms','Areas', 'Cameras', 'Controllers', 'Doors', 'EventFilters',
 def Connect():
     connected = False;
     try:
-        cnxn = pyodbc.connect('DRIVER={ODBC Driver 18 for SQL Server};'
-                                'SERVER='+server+';'
-                                'DATABASE='+database+';'
-                                'Trusted_Connection=yes;'
-                                'TrustServerCertificate=Yes;'
-                                )
+        cnxn_string = ('DRIVER={ODBC Driver 18 for SQL Server};'
+                        'SERVER='+server+';'
+                        'DATABASE='+database+';'
+                        'Trusted_Connection=yes;'
+                        'TrustServerCertificate=Yes;'
+                        )
+        connection_url = URL.create("mssql+pyodbc", query={"odbc_connect": cnxn_string})
+        engine = create_engine(connection_url)
+
+        # Test connection 
+        with engine.connect() as connection:
+            sql_query = pd.read_sql(f''' 
+                                        SELECT * FROM [SecurityExpert].[dbo].[Controllers];
+                                        '''
+                                        ,connection)                            
         logging.info(f' Successfully connected to {database} using Windows credentials')
         connected = True
     except:
@@ -50,28 +62,30 @@ def Connect():
 # You may use ODBC Driver 18 and 17 as well - https://learn.microsoft.com/en-us/sql/connect/odbc/windows/release-notes-odbc-sql-server-windows?view=sql-server-ver16
     if not connected:
         try:
-            cnxn = pyodbc.connect('DRIVER={ODBC Driver 18 for SQL Server};'
-                                  'SERVER='+server+';'
-                                  'DATABASE='+database+';'
-                                  'UID='+username+';'
-                                  'PWD='+ password+';'
-                                  'TrustServerCertificate=Yes;'
-                                  )
+            cnxn_string = ('DRIVER={ODBC Driver 18 for SQL Server};'
+                            'SERVER='+server+';'
+                            'DATABASE='+database+';'
+                            'UID='+username+';'
+                            'PWD='+ password+';'
+                            'TrustServerCertificate=Yes;'
+                            )
+            connection_url = URL.create("mssql+pyodbc", query={"odbc_connect": cnxn_string})
+            engine = create_engine(connection_url)
+
+            # Test connection 
+            with engine.connect() as connection:
+                sql_query = pd.read_sql(f''' 
+                                            SELECT * FROM [SecurityExpert].[dbo].[Controllers];
+                                            '''
+                                            ,connection)
+
             logging.info(f' Successfully connected to {database} using username/passwd')
         except:
-            logging.warning(' Connection to DB using username/passwd failed.')
-    return cnxn
+            logging.warning(' Connection to DB using username/passwd failed. The program will now exit.')
+            exit()
+    return engine
 
 ## --------------------- Method declarations ---------------------
-def CreateBackupDir():
-    if not os.path.exists(dirname):
-        try: 
-            os.makedirs(dirname)
-        except:
-            logging.error(' Unable to create backup directory. Check file and folder creation permissions!')
-    else:
-        logging.error(' Directory name already exists!')
-
 def CreateBackupDirPath():
     path = Path.cwd() / dirname
     try:
@@ -101,10 +115,11 @@ def SqlSelectInto(cursor, tableName: str):
 # Takes: cnxn - pyODBC connection, tableName, operation - 0 is working set, 1 is backup
 # Returns: nothing
 def WriteTableToFile(cnxn, tableName: str, operation: bool):
-    sql_query = pd.read_sql_query(f''' 
+    with cnxn.connect() as connection:
+        sql_query = pd.read_sql(f''' 
                                     SELECT * FROM [SecurityExpert].[dbo].[{tableName}];
                                     '''
-                                    ,cnxn) # here, the 'conn' is the variable that contains your database connection information from step 2
+                                    ,connection) # here, the 'conn' is the variable that contains your database connection information from step 2
     df = pd.DataFrame(sql_query)
     if operation: 
         # Take a backup with the dirname above (it is created at start of script!)
@@ -115,24 +130,55 @@ def WriteTableToFile(cnxn, tableName: str, operation: bool):
     df.to_csv (path, index = False)
 
 
+# Description: Fetches a working set dataframe (TODO: don't hardcode, make it more general)
+# Takes: tableName - name of the Dataframe(in the form of a CSV, ofc), string
+# Returns: nothing / TODO: error msgs or exceptions   -  ALSO: add this to modules and make it not require a param? Also implement protections (even if CheckCSV() is for that exact purpose)
+def FetchWSDataFrame(tableName: str):
+    path = Path().cwd() / 'working_set' / f'{tableName}.csv'
+    return pd.read_csv(path)
+
+
 # Description: Restores the CSV bacup to a remote Security Expert DB.
 # Takes: cnxn - pyODBC connection
-# Returns:
+# Returns: nothing / TODO: error msgs or exceptions
 def RestoreAll(cnxn):
     # First, build a working set of the current environment
     for table in tables:
         WriteTableToFile(cnxn, table, 0)
 
+    # Perform check if all files are present
     if not CheckCSV(): # TODO: move this check to wherever the user makes a folder selection
         logging.error('The selected folder does not have all the required backup files!')
-        return -1
+        raise RuntimeError('Exiting...')
 
-    pass
+    # Fetch DFs in order - Controllers, Sites, FloorPlans, everything else... TODO: refactoring here according to above ^
+    sites = Sites()
+    controllers = Controllers()
+    floorplans = FloorPlans()
+
+    # Run preprocess for all objects, ORDER IS IMPORTANT!
+    path = Path() / GetBackupDirsPath()[-1] / 'Sites.csv'
+    sites.FetchAndPreprocess(cnxn, path)
+    sites.Restore(cnxn)
+
+    # if there are Sites IDs to process | TODO: try to reduce coupling between objects, taken to separate method
+    if sites.dictdf.empty:
+        logging.debug(' No Sites to restore...')
+
+    path = Path() / GetBackupDirsPath()[-1] / 'Controllers.csv'
+    controllers.FetchAndPreprocess(cnxn, path)
+    controllers.ProcessIDs(sites.dictdf)
+    controllers.Restore(cnxn)
+
+    if controllers.dictdf.empty:
+        logging.debug(' No Controllers to restore...')
+
+
 
 
 # Description: Backs up the remote SQL tables and 
 # Takes: cnxn - SQL connection info
-# Returns: 
+# Returns: nothing / TODO: maybe error msgs?
 def BackupAll(cnxn):
     # Create the backup folder
     CreateBackupDirPath()
@@ -140,17 +186,18 @@ def BackupAll(cnxn):
     for table in tables:
         WriteTableToFile(cnxn, table, 1)
 
-# TODO: check pandas.read_sql_query backwards, whether it works okay, compare to original table
-def writeFileToDb(cursor, fileName):
+# Process working set dir before restoring!
+def SetupWorkingSetDir():
+    path = Path() / 'working_set'
 
-    pass
-
-def GetBackupDirs():
-    dirs = []
-    for d in os.listdir():
-        if os.path.isdir(d) and fnmatch.fnmatch(d, 'backup_*'):
-            dirs.append(d)
-    return dirs
+    # if it exists, remove it, DO NOT PUT OTHER STUFF IN IT, IT WILL BE REMOVED TOO
+    if path.is_dir():
+        try:
+            shutil.rmtree(path)
+        except OSError as e:
+            logging.error(f' Failed to remove {e.filename} folder! Error msg: {e.strerror} ')
+    # then make it again, so it's empty
+    path.mkdir()
 
 def GetBackupDirsPath():
     dirs = []
@@ -173,22 +220,22 @@ def CheckCSV():
     return csv_fnames.sort() == tables.sort() # Use sort to make abosultely sure the lists are in the same order! Perf penalty is negligible for already sorted lists.
 
 
-def CompareCSV(cnxn, tableName: str, path: Path):
+def CompareCSV(cnxn, tableName: str, path: Path) -> pd.DataFrame:
     #prevCwd = os.getcwd()
     #os.chdir(os.path.join(prevCwd, path))   # change working dir to current backup dir TODO: THIS WILL BREAK IF CUSTOM PATH IS SELECTED, FIX getDirs() TO GIVE FULL PATHS!
     #logging.debug(os.getcwd())
 
-    df1 = pd.read_sql_query(f''' 
-                             SELECT * FROM [SecurityExpert].[dbo].[{tableName}];
-                             '''
-                             ,cnxn)
+    df1 = pd.read_sql(f''' 
+                        SELECT * FROM [SecurityExpert].[dbo].[{tableName}];
+                        '''
+                        ,cnxn)
     csv_path = path / f'{tableName}.csv'
     df2 = pd.read_csv(csv_path)
 
     logging.debug(df1)
     
     if df1.size > df2.size:
-        logging.warning(' The database has more records than the backup. It may be intentional, but you also may not have an up-to-date full backup of your data. ')
+        logging.warning(' The database has more records than the backup. It may be intentional, but you also may not have an up-to-date full backup of your data.')
     #difference = df1.loc[~df1['Name'].isin(df2['Name'])]    # TODO: figure out a way to get reliable info about possibly changed or re-added FloorPlans... CURRENTLY ONLY FILTERS BY NAME AND DOESNT STOP FOR CARD TEMPLATES
 
     df2['is_equal'] = np.where(df2['Name'].isin(df1['Name']), True, False) # make a new col in df2 that compares the names of objects between the dataframes 
@@ -197,15 +244,15 @@ def CompareCSV(cnxn, tableName: str, path: Path):
 
     df2 = df2.loc[~df2['is_equal'], :] # copy-less removal of everything with attribute 'True' (we want the differences)
 
-    # TODO: compare df's by the Name, then crawl through the IDs
+    # TODO: compare df's by the Name, then crawl through the IDs in order 
 
     
-    logging.debug(df2)
+    logging.debug(df2.empty)
 
 
     #os.chdir(prevCwd)   # return to parent dir at end
     #logging.debug(os.getcwd())
-    #return df2
+    return df2
     
 ## ------------------------     Main      ------------------------
 def main():
@@ -214,15 +261,15 @@ def main():
 
     print ('Reading data from table')   # define connection (for pandas) and cursor (for pyODBC)
     cnxn = Connect()
-    cursor = cnxn.cursor()
+    #cursor = cnxn.cursor()
 
     
     
     #for tb in tables: 
     #    writeTableToFile(cnxn, tb, 1)
 
-    CompareCSV(cnxn, 'FloorPlans', GetBackupDirsPath()[-1])
-    CheckCSV()
+    #CompareCSV(cnxn, 'FloorPlans', GetBackupDirsPath()[-1])
+    #CheckCSV()
 
     # this code block finds all child folders starting with 'backup_'
     #dirs = [name for name in os.listdir('.') if os.path.isdir(name)]
@@ -232,6 +279,8 @@ def main():
     #print(dirs)
 
     #print(getBackupDirsPath())
+    # self-explanatory
+    SetupWorkingSetDir()
 
     # Create the main menu
     menu = ConsoleMenu('Security Expert pyTools', 'Schneider Electric Bulgaria')    
@@ -244,7 +293,7 @@ def main():
     backup_dir_submenuitem = SubmenuItem('Backup', submenu=backup_menu, menu=menu)
     
     restore_menu = ConsoleMenu(title='Restore to DB submenu')
-    restore_func = FunctionItem(text='Restore F-n', function=Controllers.buildWorkingSet, args=['dirname'], menu=restore_menu)
+    restore_func = FunctionItem(text='Restore F-n', function=RestoreAll, args=[cnxn], menu=restore_menu)
     restore_menu.append_item(restore_func)
     restore_dir_submenuitem = SubmenuItem('Restore', submenu=restore_menu, menu=menu)
 

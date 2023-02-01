@@ -1,0 +1,3 @@
+CameraID,SiteID,Name,Name2,DVR,Address,System,LastModified,LastModifiedValid,Created,LastOperator,ShowSideBarControlsInStatusPage,StretchImage,MonitorEvents,FloorPlan,IPAddress,IPPort,CameraServiceID,Type,URL,Username,Password,CameraNameInDVR
+1,1,DVRCam1,DVRCam1,0,0,,2022-09-21 14:24:16.180,True,2022-09-21 14:24:16.180,Admin,False,True,True,2147483647,,80,0,0,,,,
+2,1,DVRCam2,DVRCam2,2147483647,0,,2022-11-24 15:15:48.990,True,2022-11-24 15:15:48.990,Admin,False,True,True,2147483647,,80,0,1,,,,
