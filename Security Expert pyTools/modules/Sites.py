@@ -12,13 +12,13 @@ class Sites:
     def __init__(self):
         self.dictdf = pd.DataFrame() # this DF will keep track of old IDs and the new computed IDs, it will be used as a disctionary when crawling through the objects and fixing mismatched IDs 
         self.tempdf = pd.DataFrame() # this DF will keep track of the changes (after comparing backed up DF to remote DF) that need to be sent to the DB
-        #self.ready = False # set this to True when you're sure all IDs are set correctly
 
     def Backup(self, cnxn, bPath: Path): # this takes the Path defined in the main script
-        df = pd.read_sql_query(f'SELECT * FROM [SecurityExpert].[dbo].[{self.table_name}];'
-                                       ,con=cnxn
-                                       ,parse_dates=self.date_fields
-                                       ) # here, the 'conn' is the variable that contains your database connection information from step 2
+        with cnxn.begin() as conn:
+            df = pd.read_sql_query(f'SELECT * FROM [SecurityExpert].[dbo].[{self.table_name}];'
+                                           ,con=conn
+                                           ,parse_dates=self.date_fields
+                                           ) # here, the 'conn' is the variable that contains your database connection information from step 2
         
         # Take a backup with the table_name above (it is created at start of script!)
         #print(Path().cwd())
@@ -39,7 +39,6 @@ class Sites:
 
         if df1.size > df2.size:
             logging.warning(' The database has more records than the backup. It may be intentional, but you also may not have an up-to-date full backup of your data.')
-        #difference = df1.loc[~df1['Name'].isin(df2['Name'])]    # TODO: figure out a way to get reliable info about possibly changed or re-added FloorPlans... CURRENTLY ONLY FILTERS BY NAME AND DOESNT STOP FOR CARD TEMPLATES
 
         df2['is_equal'] = np.where(df2['Name'].isin(df1['Name']), True, False) # make a new col in df2 that compares the names of objects between the dataframes 
 
@@ -73,25 +72,26 @@ class Sites:
                                             .dropna(axis='columns')
             )
         # ------------------------------- probably cut method here, move to upper method and return df_list
-        with cnxn.connect() as connection:
+        with cnxn.connect() as conn:
             for df in df_list:
                 #print(df)
-                df.to_sql(f'{self.table_name}', connection, if_exists='append', index=False)
+                df.to_sql(f'{self.table_name}', con=conn, if_exists='append', index=False)
 
         # ------------------------------------------------------------ probably cut method here and make a new one from code below - named Postprocess()
         df_list_names = self.tempdf['Name'].values
 
         # now we need to read what IDs the DB has given to the restored objects
         df_readback = pd.DataFrame()
-        with cnxn.connect() as connection:
+        with cnxn.connect() as conn:
             for name in df_list_names:  # this loop may be able to be optimized and removed by using Name IN (?) and a stringified list, but for now that doesn't seem to work
                 df_readback = pd.concat([df_readback,
                                     pd.read_sql_query(f'SELECT * FROM [SecurityExpert].[dbo].[{self.table_name}] WHERE Name=(?);'
-                                                                        ,con=cnxn
-                                                                        ,parse_dates=self.date_fields
-                                                                        ,params=[name])
-                                            ]
-                                            ,ignore_index=True)
+                                                      ,con=conn
+                                                      ,parse_dates=self.date_fields
+                                                      ,params=[name]
+                                                      )
+                                    ]
+                                    ,ignore_index=True)
         #print('printing readback df')
         #print(df_readback)
 
