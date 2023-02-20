@@ -1,7 +1,5 @@
 from ast import Try
-from email.mime import image
-from pickle import OBJ
-import sys, os, subprocess
+import sys, os, subprocess, re, ipaddress
 import fnmatch
 import shutil
 import pyodbc
@@ -14,7 +12,6 @@ from consolemenu import ConsoleMenu, SelectionMenu
 from consolemenu.items import FunctionItem, SubmenuItem, CommandItem
 from sqlalchemy.engine import URL, create_engine
 from modules import Alarms, Areas, Cameras, Controllers, Doors, DVRs, EventFilters,FloorPlans, FloorPlanSymbols, Intercoms, LineData, LinePointsData, PGMs, Sites, TroubleZones
-
 
 
 # Connection information:
@@ -68,7 +65,7 @@ def Connect():
         # Test connection 
         with engine.connect() as connection:
             sql_query = pd.read_sql(f'SELECT * FROM [SecurityExpert].[dbo].[Controllers];'
-                                    ,connection)                            
+                                    ,connection)                 
         logging.info(f' Successfully connected to {database} using Windows credentials')
         connected = True
     except:
@@ -109,7 +106,7 @@ def Connect():
 
             logging.info(f' Successfully connected to {database} using username/passwd')
         except:
-            logging.warning(' Connection to DB using username/passwd failed. The program will now exit.')
+            logging.error(' Connection to DB using username/passwd failed. The program will now exit.')
             exit()
     return engine
 
@@ -268,7 +265,7 @@ def BackupAll(cnxn):
     path = Path() / GetBackupDirsPath()[-1] / 'FloorPlans.csv'
     floorplans.Backup(cnxn, path)
     
-    print(f' Successfully backed up X objects in folder {path.parent}')
+    logging.info(f' Successfully backed up X objects in folder {path.parent}')
 
 def GetBackupDirsPath():
     dirs = {}
@@ -383,7 +380,7 @@ def RestoreSites(cnxn, dPath):
                                       'New': df_readback['SiteID'].values
                                       })
     dictdf_sites = pd.concat([dictdf_sites, dictdf_sites_diff]) # concat the two tables, NEEDS THEM IN A LIST
-    print(' DICT DF SITES set to:', dictdf_sites)
+    logging.debug(' DICT DF SITES set to:', dictdf_sites)
 
 # method that restores Controllers from CSV to DB, matched by Name
 dictdf_controllers = pd.DataFrame
@@ -505,7 +502,7 @@ def RestoreFloorPlans(cnxn, dPath, selection_list):
 
     # Get info for any changes in SiteIDs and apply any differences here | TODO: handle orphaned data?
     if not dictdf_sites.empty:
-        print(df2)
+        #print(df2)
         df2['SiteID'] = df2['SiteID'].replace(dictdf_sites['Old'].values, dictdf_sites['New'].values)
 
     # Solve RecordGroups by zeroing all of them, which have a value | TODO: May be better to just set them all to 'no value' (2147483647)
@@ -532,19 +529,19 @@ def RestoreFloorPlans(cnxn, dPath, selection_list):
                                         .dropna(axis='columns')
         )
 
-    df_list_names = df2['Name'].values
+    df_list_names = list(df2['Name'])   # exists in order to know which FPs to look for after restoring (to find their new IDs)
 
     # Push row by row list to DB, if it already exists, skip it and remove its name from the list, so its not included in df_readback later
     with cnxn.connect() as conn:
         for row in df_list:
-            #print(df)
             if row['Name'].values in df_db['Name'].values:
                 logging.info(f' FloorPlan named {row.Name.values} already exists! Skipping...')
                 df_list_names.remove(row['Name'].values)
-                continue
+                continue    # get to next iteration, skipping the upload
             row.to_sql('FloorPlans', con=conn, if_exists='append', index=False)
+            logging.debug('Row restored to FloorPlans:')
+            logging.debug(row)
 
-    
 
     # now we need to read what IDs the DB has given to the restored objects
     df_readback = pd.DataFrame()
@@ -560,14 +557,17 @@ def RestoreFloorPlans(cnxn, dPath, selection_list):
                                     ,ignore_index=True)
     #print('printing readback df')
     #print(df_readback)
-    print('-- RESTORE FLOOR PLANS')
-    print(df2)
-    print(df_readback)
+    logging.info('Restoring FloorPlans...')
+    logging.debug('df2 is: ')
+    logging.debug(df2)
+    logging.debug('df_readback is: ')
+    logging.debug(df_readback)
     if not df_readback.empty:
         dictdf_fps  = pd.DataFrame({'Old': df2['FloorPlanID'].values, 
                                     'New': df_readback['FloorPlanID'].values
                                     })
-    print(' -- DICT DF Fps', dictdf_fps)
+    logging.debug('dictdf_fps is:')
+    logging.debug(dictdf_fps)
 
 
 # method that backs up selected FloorPlans, LineData (these 2 have image fields) and objects from DB to CSV
@@ -596,10 +596,12 @@ def BackupFloorPlans(cnxn, dPath: Path): # , selection_list):
                     dest_path = dPath.parent / f'{img_name}.jpg'
                     try:
                         shutil.copy2(src=src_path, dst=dest_path) # attempt to copy the images and their metadata, ONLY WORKS WHEN SCRIPT IS RUN LOCALLY (same machine as images)
+                        logging.debug(f'Image copied from {src_path} to {dest_path}')
                     except FileNotFoundError as e:  # print out an error if images are not found!
-                        print(e)
+                        logging.warning(e)
                 
             df_fp.to_csv(path, sep=';', index = False)
+            logging.debug(f'Backed up {table} to {path}')
 
         elif table == 'LineData':
             with cnxn.begin() as conn:
@@ -615,11 +617,14 @@ def BackupFloorPlans(cnxn, dPath: Path): # , selection_list):
                     dest_path = dPath.parent / f'{img_name}.jpg'
                     try:
                         shutil.copy2(src=src_path, dst=dest_path) # attempt to copy the images and their metadata, ONLY WORKS WHEN SCRIPT IS RUN LOCALLY (same machine as images)
+                        logging.debug(f'Image copied from {src_path} to {dest_path}')
                     except FileNotFoundError as e:  # print out an error if images are not found!
-                        print(e)
+                        logging.warning(e)
 
             #df = df.loc[df['FloorPlanID'].isin(ids_list)]  # keep only values from selected Floor Plans - JUST BACKUP ALL!
             df.to_csv(path, sep=';', index = False)
+            logging.debug(f'Backed up {table} to {path}')
+
         else:
             with cnxn.begin() as conn:
                 df = pd.read_sql_query(f'SELECT * FROM [SecurityExpert].[dbo].[{table}];'
@@ -628,6 +633,7 @@ def BackupFloorPlans(cnxn, dPath: Path): # , selection_list):
 
                 # Take a backup with the dirname above (it is created at start of script!)
             df.to_csv (path, sep=';', index = False)
+            logging.debug(f'Backed up {table} to {path}')
 
     return df_fp['FloorPlanID'].values    # return IDs
 
@@ -679,7 +685,8 @@ def ProcessLineData(cnxn, dPath: Path, ids_list: list):
     #    df_list[index] = (df_list[index].drop(columns=['ID'])
     #                                    .dropna(axis='columns')
     #    )
-    print(df2)
+    logging.debug('LineData CSV: ')
+    logging.debug(df2)
     #df2 = df2.reset_index(drop=True)   # not necessary
     to_remove = []  # list to hold IDs that need to be removed because custom fields in card templates will NOT be restored!
     to_remove_pointsdata = {}   # dict to hold k/v pairs of items that need to be removed from LinePointsData
@@ -687,7 +694,8 @@ def ProcessLineData(cnxn, dPath: Path, ids_list: list):
     if not dictdf_fps.empty:            # correct the FloorPlanIDs from dictdf | the FloorPlans table *MUST* be restored properly! | keep only values from restorable FPs !!
         df2 = df2.loc[df2['FloorPlanID'].isin(dictdf_fps['Old'])]  
         df2['FloorPlanID'] = df2['FloorPlanID'].replace(dictdf_fps['Old'].values, dictdf_fps['New'].values)
-        print('=== LINE DATA dict df ',  df2)
+        logging.debug('LineData df after dictdf processing: ')
+        logging.debug(df2)
 
     else: # this should really not be empty
         sys.exit(' No restorable Floor Plans found. Exiting...')
@@ -697,12 +705,14 @@ def ProcessLineData(cnxn, dPath: Path, ids_list: list):
 
     # Process row by row
     for i in df2.index:
-        #print(f'Current LineData row is {i}: ')
-        #print(df2.loc[i])
+        logging.debug(f'Current LineData row is: ')
+        logging.debug(df2.loc[i])
         
         # row is about an object
         if df2['DeviceTypeID'].loc[i] in device_types.keys():  
             df2.loc[i] = CrawlTable(cnxn=cnxn, dPath=dPath, row=df2.loc[i])     # replace row with the correct info 
+            logging.debug(f'CrawlTable op on row {i}, now row is:')
+            logging.debug(f'{df2.loc[i]}')
 
         # row is about an image
         elif not df2['ImagePath'].loc[i] == '': 
@@ -711,6 +721,7 @@ def ProcessLineData(cnxn, dPath: Path, ids_list: list):
 
             if img_path.exists():
                 df2['ImagePath'].loc[i] = img_path.absolute().__str__           # convert to string and set new path
+                logging.debug('Img path of row {i} set to {img_path.absolute().__str__}')
             else:
                 logging.warning(f' Image {img_path} NOT FOUND! Please check manually if it exists and report the error!')
             
@@ -718,6 +729,7 @@ def ProcessLineData(cnxn, dPath: Path, ids_list: list):
         elif df2['Text'].loc[i] != None and ('<CUSTOM' in df2['Text'].loc[i] or '<CREDENTIALTYPEID' in df2['Text'].loc[i]):
             to_remove.append(i)                                                 # collect indices in list to drop later, DON'T DROP DURING LOOP!
             to_remove_pointsdata['FloorPlanID'].append( df2['LineID'].loc[i] )
+            logging.debug(f'Card template custom data field in row {i}.')
 
     df2.drop(to_remove)                                                         # drop indices pertaining to custom fields 
     ProcessLinePointsData(cnxn, dPath, to_remove=to_remove_pointsdata)          # <-- LinePointsData is restored here
@@ -732,7 +744,7 @@ def ProcessLineData(cnxn, dPath: Path, ids_list: list):
         )
 
     # Push row by row list to DB, if it already exists, skip it and remove its name from the list, so its not included in df_readback later
-    print('Sending LineData to DB: ')
+    logging.info(' Sending LineData to DB: ')
     with cnxn.connect() as conn:
         for row in df_list:
             row.to_sql('LineData', con=conn, if_exists='append', index=False)
@@ -764,26 +776,21 @@ def CrawlTable(cnxn, dPath: Path, row: pd.Series):
         logging.error(f' {table_name}.CSV backup file was not found!!! Exiting...')
         sys.exit()
 
-    # look for object name in CSV table
+    logging.debug(f'CrawlTable object received from table {table_name}')
+    logging.debug('Current LineData row:')
+    logging.debug(row_copy)
     
-    #print(df2[ deviceid_col_names.get(table_name) ])
-    
+    # find row in CSV
     table_row_csv = df2[df2[ deviceid_col_names.get(table_name) ] == row_copy['DeviceAddressID'] ].copy()   # get the correct row from the CSV DF's ID index (saved in dict)
-    #if table_name == 'Cameras' or table_name == 'Variables':
-    #    print('-- Table name: ', table_name, ' device address id: ',row_copy['DeviceAddressID'])
-    #    print('-- Last table_row_csv: ', table_row_csv)
-    #    #print(' and table_row_csv Name: ', table_row_csv['Name']) # <--- issue here - this should be a pd.Series but is int ???
-
-    #    print('-- DB df ', df)
-    #    print('-- row [device addr id] ', row_copy['DeviceAddressID'])
-    #    print('-- table row csv current name', table_row_csv['Name'].get( row_copy['DeviceAddressID'])) # <- this was the culprit, need exact string match, this messes it up if ID isnt same!
-    #    #print('-- table row csv loc device addr id ',table_row_csv.loc['DeviceAddressID'])
-    #    print(' ------ df name', df['Name'])
-    #    print('------ table row csv name', table_row_csv['Name'])
-    table_row_db = df[df['Name'] == table_row_csv['Name'].iat[0] ]  # get the same named row from DB, if it exists | iat[0] so string can be reached, otherwise it would NOT be fine to use if it wasn't only 1 entry
-    #if table_name == 'Cameras' or table_name == 'Variables':
-    #    print('-- table row db ', table_row_db)
+    logging.debug('Current CSV row:')
+    logging.debug(table_row_csv)
     
+    # find same row in DB
+    table_row_db = df[df['Name'] == table_row_csv['Name'].iat[0] ]  # get the same named row from DB, if it exists | iat[0] so string can be reached, otherwise it would NOT be fine to use if it wasn't only 1 entry
+
+    logging.debug('Current DB row:')
+    logging.debug(table_row_db)
+
     # modify the datetime to now so we know when object was restored
     curr_time = datetime.utcnow().strftime("%d/%m/%Y %H:%M:%S")
     table_row_csv['Created'].iat[0] = pd.to_datetime(curr_time)
@@ -791,7 +798,10 @@ def CrawlTable(cnxn, dPath: Path, row: pd.Series):
 
     # if not empty, Name has been found in DB DF | get its ID and update row
     if not table_row_db.empty: 
-        row_copy.loc['DeviceAddressID'] = table_row_db[ deviceid_col_names.get(table_name) ] # get ID col name from dict
+        row_copy.loc['DeviceAddressID'] = table_row_db[ deviceid_col_names.get(table_name) ] # get ID col name from dict and turn
+        logging.debug(' CrawlTable - Early exit because ID found...')
+
+        return pd.Series(row_copy, dtype=object)
 
     # if empty, Name has *NOT* been found in DB DF | restore table_row_csv object and get back its ID
     else:
@@ -835,8 +845,8 @@ def CrawlTable(cnxn, dPath: Path, row: pd.Series):
 
 
         with cnxn.connect() as conn:
-            print(f'-- Sending object in {table_name} to DB: ')
-            print(table_row_csv)
+            logging.debug(f' Sending object in {table_name} to DB: ')
+            logging.debug(table_row_csv)
             table_row_csv.to_sql(table_name, con=conn, if_exists='append', index=False) # <--- RESTORE object to respective table in DB
 
     # now read the object back and fetch its ID
@@ -854,7 +864,7 @@ def CrawlTable(cnxn, dPath: Path, row: pd.Series):
 
 # method that takes a list of data from ProcessLineData() in order to process and restore LinePointsData from CSV to DB
 # takes: cnxn, dPath - dir path to backup folder, to_remove - dict with k/v pairs of FloorPlanID/LineIDs
-# 
+# returns: 
 def ProcessLinePointsData(cnxn, dPath: Path, to_remove: dict):
     path = dPath / 'LinePointsData.csv'
     try:
@@ -865,6 +875,8 @@ def ProcessLinePointsData(cnxn, dPath: Path, to_remove: dict):
         logging.error(' LinePointsData.CSV backup file was not found!!! Exiting...')
         sys.exit()
 
+    logging.debug('LinePointsData read:')
+    logging.debug(df2)
     # update the FloorPlanIDs from dictdf to reach parity with LineData and get ready to restore
     # keep only restorables, otherwise the table gets full of duplicate data | if anything is restored it will be found in dictdf_fps
     if not dictdf_fps.empty:    
@@ -885,8 +897,8 @@ def ProcessLinePointsData(cnxn, dPath: Path, to_remove: dict):
 
     # restore LinePointsData now that everything about it is fixed
     with cnxn.connect() as conn:
-        print('Sending LinePointsData to DB: ')
-        print(df2)
+        logging.info('Sending processed LinePointsData to DB: ')
+        logging.debug(df2)
         df2.to_sql('LinePointsData', con=conn, if_exists='append', index=False)
 
 
@@ -927,6 +939,7 @@ def menu_restore_partial(cnxn):
 
     option = menu_select(dirs)
     dPath = dirs[option] # get path of dir that user wants, this is the way (path)
+    logging.debug(f'dPath set to: {dPath}')
     
     selection = fp_selection_menu(dPath)    # get indices of FloorPlans to restore
 
@@ -936,8 +949,10 @@ def menu_restore_partial(cnxn):
     RestoreSites(cnxn, dPath)       # always first
     RestoreControllers(cnxn, dPath) # depends on dictdf_sites
 
-    print(' DICT DF SITES set to:', dictdf_sites)
-    print(' DICT DF CTRLS set to:', dictdf_controllers)
+    logging.debug(' dictdf_sites:')
+    logging.debug(dictdf_sites)
+    logging.debug(' dictdf_controllers:')
+    logging.debug(dictdf_controllers)
 
     RestoreFloorPlans(cnxn, dPath, selection)
     ProcessLineData(cnxn, dPath, selection)
@@ -972,6 +987,7 @@ def menu_select(collection):
         except:
             print('\nWrong input. Please enter a number from the list ...\n')
 
+    logging.debug(f' Menu picked option: {option}')
     return option
 
 # this method is the FloorPlan selection menu
@@ -1014,7 +1030,6 @@ def fp_selection_menu(dPath):
 
 
 
-
 # this method parses a string with dashes and commas into a full ordered list of numbers  
 def parse(num_str):
     num = []
@@ -1029,12 +1044,78 @@ def parse(num_str):
 def clear_console(): 
     os.system('cls')
 
+def input_settings():
+    global server, username, password
+
+    ip = None
+    uname = None
+    passw = None
+    valid_ip = False
+    valid_creds = ''
+    
+    while not (valid_creds.lower() == 'y' or valid_creds.lower() == 'yes'):
+        while not valid_ip:
+            try:
+                ip = ipaddress.ip_address(input("Please enter the SQL Server instance's IP address: "))
+                valid_ip = True
+                break
+            except ValueError:
+                print('Invalid IP given... Try again.')
+                continue
+
+        uname = str(input("Please enter the database username: "))
+        passw = str(input("Please enter the database password: "))
+
+        print('\n Are these settings correct?'
+              f'\n SQL instance IP = {ip}'
+              f'\n DB username = {uname}'
+              f'\n DB password = {passw}'
+        )
+        valid_creds = str(input('Yes (Y) / No (N)?'))
+
+    logging.debug(f'IP: {ip}')
+    logging.debug(f'Username: {uname}')
+    logging.debug(f'Passwd is: {passw}')
+
+    server = str(ip)
+    #print(server)
+    username = uname
+    password = passw
+    #print(username, password)
+
+    #clear_console()
+
 ## ------------------------     Main      ------------------------
 def main():
-    logging.Logger.setLevel(logging.getLogger(), level='DEBUG')
-    #print(logging.getLogger().getEffectiveLevel())
+    # set up logger
+    logger = logging.getLogger()
+    logger.setLevel(level = logging.DEBUG)
 
-    print ('Reading data from table')   # define connection (for pandas) and cursor (for pyODBC)
+    # console logger
+    logStreamFormatter = logging.Formatter(
+      fmt=f"%(levelname)-8s %(asctime)s \t %(filename)s @function %(funcName)s line %(lineno)s - %(message)s", 
+      datefmt="%H:%M:%S"
+    )
+    consoleHandler = logging.StreamHandler(stream=sys.stdout)
+    consoleHandler.setFormatter(logStreamFormatter)
+    consoleHandler.setLevel(level=logging.INFO)
+
+    logger.addHandler(consoleHandler)
+
+    # file handler
+    logFileFormatter = logging.Formatter(
+        fmt=f"%(levelname)s %(asctime)s (%(relativeCreated)d) \t %(filename)s %(funcName)s L%(lineno)s - %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+    fileHandler = logging.FileHandler(filename='SecExp_pyTools.log')
+    fileHandler.setFormatter(logFileFormatter)
+    fileHandler.setLevel(level=logging.DEBUG)
+
+    logger.addHandler(fileHandler)
+    
+    input_settings()
+
+    print ('Connecting to database... ')   # define connection (for pandas) and cursor (for pyODBC)
     cnxn = Connect()
     #cursor = cnxn.cursor()
     #SetupWorkingSetDir()
@@ -1043,7 +1124,7 @@ def main():
             print(
                 '\nWelcome to SE SecurityExpert pyTools! Please select an acton from the menu:\n'
                 ' 1: Backup\n'
-                ' 2: Full Restore\n'
+                ' 2: Full Restore (not implemented yet, stay tuned!)\n'
                 ' 3: Partial Restore\n'
                 ' 4: Exit\n'
                 )
