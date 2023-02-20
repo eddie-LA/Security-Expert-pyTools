@@ -116,7 +116,7 @@ def CreateBackupDirPath():
     try:
         path.mkdir(exist_ok = False)
     except FileExistsError:
-        logging.warning(' Directory {dirname} already exists! Overwriting backup files...')
+        logging.warning('Directory {dirname} already exists! Overwriting backup files...')
 
     return path
     
@@ -125,7 +125,7 @@ def CreateBackupDirPath():
 # Takes: cnxn - pyODBC connection, tableName, operation - 0 is working set, 1 is backup
 # Returns: nothing
 def WriteTableToFile(cnxn, tableName: str, operation: bool):
-    with cnxn.connect() as connection:
+    with cnxn.begin() as connection:
         sql_query = pd.read_sql(f'SELECT * FROM [SecurityExpert].[dbo].[{tableName}];'
                                 ,connection) # here, the 'conn' is the variable that contains your database connection information from step 2
 
@@ -351,7 +351,7 @@ def RestoreSites(cnxn, dPath):
                                         .dropna(axis='columns')
         )
     # ------------------------------- probably cut method here, move to upper method and return df_list
-    with cnxn.connect() as conn:
+    with cnxn.begin() as conn:
         for df in df_list:
             #print(df)
             df.to_sql('Sites', con=conn, if_exists='append', index=False)
@@ -361,7 +361,7 @@ def RestoreSites(cnxn, dPath):
 
     # now we need to read what IDs the DB has given to the restored objects
     df_readback = pd.DataFrame()
-    with cnxn.connect() as conn:
+    with cnxn.begin() as conn:
         for name in df_list_names:  # this loop may be able to be optimized and removed by using Name IN (?) and a stringified list, but for now that doesn't seem to work
             df_readback = pd.concat([df_readback,
                                 pd.read_sql_query(f'SELECT * FROM [SecurityExpert].[dbo].[Sites] WHERE Name=(?);'
@@ -445,7 +445,7 @@ def RestoreControllers(cnxn, dPath):
                                         .dropna(axis='columns')
                                         )
     
-    with cnxn.connect() as conn:
+    with cnxn.begin() as conn:
         for df in df_list:
             #print(df)
             df.to_sql('Controllers', con=conn, if_exists='append', index=False)
@@ -455,7 +455,7 @@ def RestoreControllers(cnxn, dPath):
 
     # now we need to read what IDs the DB has given to the restored objects
     df_readback = pd.DataFrame()
-    with cnxn.connect() as conn:
+    with cnxn.begin() as conn:
         for name in df_list_names:  # this loop may be able to be optimized and removed by using Name IN (?) and a stringified list, but for now that doesn't seem to work
             df_readback = pd.concat([df_readback,
                                      pd.read_sql_query(f'SELECT * FROM [SecurityExpert].[dbo].[Controllers] WHERE Name=(?);'
@@ -532,10 +532,10 @@ def RestoreFloorPlans(cnxn, dPath, selection_list):
     df_list_names = list(df2['Name'])   # exists in order to know which FPs to look for after restoring (to find their new IDs)
 
     # Push row by row list to DB, if it already exists, skip it and remove its name from the list, so its not included in df_readback later
-    with cnxn.connect() as conn:
+    with cnxn.begin() as conn:
         for row in df_list:
             if row['Name'].values in df_db['Name'].values:
-                logging.info(f' FloorPlan named {row.Name.values} already exists! Skipping...')
+                logging.info(f'FloorPlan named {row.Name.values} already exists! Skipping...')
                 df_list_names.remove(row['Name'].values)
                 continue    # get to next iteration, skipping the upload
             row.to_sql('FloorPlans', con=conn, if_exists='append', index=False)
@@ -545,7 +545,7 @@ def RestoreFloorPlans(cnxn, dPath, selection_list):
 
     # now we need to read what IDs the DB has given to the restored objects
     df_readback = pd.DataFrame()
-    with cnxn.connect() as conn:
+    with cnxn.begin() as conn:
         for name in df_list_names:  # this loop may be able to be optimized and removed by using Name IN (?) and a stringified list, but for now that doesn't seem to work
             df_readback = pd.concat([df_readback,
                                      pd.read_sql_query(f'SELECT * FROM [SecurityExpert].[dbo].[FloorPlans] WHERE Name=(?);'
@@ -745,7 +745,7 @@ def ProcessLineData(cnxn, dPath: Path, ids_list: list):
 
     # Push row by row list to DB, if it already exists, skip it and remove its name from the list, so its not included in df_readback later
     logging.info(' Sending LineData to DB: ')
-    with cnxn.connect() as conn:
+    with cnxn.begin() as conn:
         for row in df_list:
             row.to_sql('LineData', con=conn, if_exists='append', index=False)
     
@@ -844,13 +844,13 @@ def CrawlTable(cnxn, dPath: Path, row: pd.Series):
                 table_row_csv = table_row_csv[ ['Name', 'Name2', 'ControllerID', 'LastModified', 'LastModifiedValid', 'Created'] ]
 
 
-        with cnxn.connect() as conn:
+        with cnxn.begin() as conn:
             logging.debug(f' Sending object in {table_name} to DB: ')
             logging.debug(table_row_csv)
             table_row_csv.to_sql(table_name, con=conn, if_exists='append', index=False) # <--- RESTORE object to respective table in DB
 
     # now read the object back and fetch its ID
-    with cnxn.connect() as conn:
+    with cnxn.begin() as conn:
         df_readback = pd.read_sql_query(f'SELECT * FROM [SecurityExpert].[dbo].[{table_name}] WHERE Name=(?);'
                                         ,con=conn
                                         #,parse_dates=date_fields
@@ -896,7 +896,7 @@ def ProcessLinePointsData(cnxn, dPath: Path, to_remove: dict):
     df2 = df2.drop(columns=['ID'])
 
     # restore LinePointsData now that everything about it is fixed
-    with cnxn.connect() as conn:
+    with cnxn.begin() as conn:
         logging.info('Sending processed LinePointsData to DB: ')
         logging.debug(df2)
         df2.to_sql('LinePointsData', con=conn, if_exists='append', index=False)
