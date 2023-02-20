@@ -39,7 +39,9 @@ If you want to connect in Local mode (using Windows Credentials), you can leave 
 
 If you want to connect in SQL Authentication mode, create a user account/password combo for your SecurityExpert DB.
 
-**WARNING:** Before using the tool for restoring, make sure that SecurityExpert and all its services are stopped!
+&nbsp;&nbsp; **WARNING:** Before using the tool for restoring, make sure that SecurityExpert and all its services are stopped! 
+
+&nbsp;&nbsp; **WARNING 2:** It's **highly recommended** to backup your database in any case, because things can *always* go wrong! Follow the several backups methodology to protect your data! Info on how to backup your DB [here](https://learn.microsoft.com/en-us/sql/relational-databases/backup-restore/create-a-full-database-backup-sql-server?view=sql-server-ver16).
 
 
 ### Create local account for SecurityExpert DB
